@@ -21,12 +21,21 @@
   *
   */
 
-#include "jconf.h"
-#include "console.h"
+#include "jconf.hpp"
+#include "params.hpp"
+
+#include "xmrstak/misc/console.hpp"
+#include "xmrstak/misc/jext.hpp"
+#include "xmrstak/misc/console.hpp"
+#include "xmrstak/misc/utility.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <vector>
+#include <numeric>
+#include <algorithm>
 
 #ifdef _WIN32
 #define strcasecmp _stricmp
@@ -35,20 +44,16 @@
 #include <cpuid.h>
 #endif
 
-#include "rapidjson/document.h"
-#include "rapidjson/error/en.h"
-#include "jext.h"
-#include "console.h"
 
 using namespace rapidjson;
 
 /*
  * This enum needs to match index in oConfigValues, otherwise we will get a runtime error
  */
-enum configEnum { aCpuThreadsConf, sUseSlowMem, bNiceHashMode, bAesOverride,
-	bTlsMode, bTlsSecureAlgo, sTlsFingerprint, sPoolAddr, sWalletAddr, sPoolPwd,
-	iCallTimeout, iNetRetry, iGiveUpLimit, iVerboseLevel, iAutohashTime,
-	bDaemonMode, sOutputFile, iHttpdPort, bPreferIpv4 };
+enum configEnum {
+	aPoolList, sCurrency, bTlsSecureAlgo, iCallTimeout, iNetRetry, iGiveUpLimit, iVerboseLevel, bPrintMotd, iAutohashTime,
+	bDaemonMode, sOutputFile, iHttpdPort, sHttpLogin, sHttpPass, bPreferIpv4, bAesOverride, sUseSlowMem
+};
 
 struct configVal {
 	configEnum iName;
@@ -59,28 +64,57 @@ struct configVal {
 // Same order as in configEnum, as per comment above
 // kNullType means any type
 configVal oConfigValues[] = {
-	{ aCpuThreadsConf, "cpu_threads_conf", kNullType },
-	{ sUseSlowMem, "use_slow_memory", kStringType },
-	{ bNiceHashMode, "nicehash_nonce", kTrueType },
-	{ bAesOverride, "aes_override", kNullType },
-	{ bTlsMode, "use_tls", kTrueType },
+	{ aPoolList, "pool_list", kArrayType },
+	{ sCurrency, "currency", kStringType },
 	{ bTlsSecureAlgo, "tls_secure_algo", kTrueType },
-	{ sTlsFingerprint, "tls_fingerprint", kStringType },
-	{ sPoolAddr, "pool_address", kStringType },
-	{ sWalletAddr, "wallet_address", kStringType },
-	{ sPoolPwd, "pool_password", kStringType },
 	{ iCallTimeout, "call_timeout", kNumberType },
 	{ iNetRetry, "retry_time", kNumberType },
 	{ iGiveUpLimit, "giveup_limit", kNumberType },
 	{ iVerboseLevel, "verbose_level", kNumberType },
+	{ bPrintMotd, "print_motd", kTrueType },
 	{ iAutohashTime, "h_print_time", kNumberType },
 	{ bDaemonMode, "daemon_mode", kTrueType },
 	{ sOutputFile, "output_file", kStringType },
 	{ iHttpdPort, "httpd_port", kNumberType },
-	{ bPreferIpv4, "prefer_ipv4", kTrueType }
+	{ sHttpLogin, "http_login", kStringType },
+	{ sHttpPass, "http_pass", kStringType },
+	{ bPreferIpv4, "prefer_ipv4", kTrueType },
+	{ bAesOverride, "aes_override", kNullType },
+	{ sUseSlowMem, "use_slow_memory", kStringType }
 };
 
 constexpr size_t iConfigCnt = (sizeof(oConfigValues)/sizeof(oConfigValues[0]));
+
+xmrstak::coin_selection coins[] = {
+	// name, userpool, devpool, default_pool_suggestion
+	{ "aeon7",               {cryptonight_aeon, cryptonight_aeon, 0u},            {cryptonight_aeon, cryptonight_aeon, 0u},     "mine.aeon-pool.com:5555" },
+	{ "bbscoin",             {cryptonight_aeon, cryptonight_aeon, 0u},            {cryptonight_aeon, cryptonight_aeon, 0u}, nullptr },
+	{ "bittube",             {cryptonight_heavy, cryptonight_bittube2, 255u},     {cryptonight_heavy, cryptonight_heavy, 0u},"mining.bit.tube:13333"},
+	{ "cryptonight",         {cryptonight_monero_v8, cryptonight, 255u},          {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "cryptonight_bittube2",{cryptonight_heavy, cryptonight_bittube2, 255u},     {cryptonight_heavy, cryptonight_heavy, 0u},nullptr},
+	{ "cryptonight_masari",  {cryptonight_monero_v8, cryptonight_masari, 255u},   {cryptonight_monero_v8, cryptonight_monero_v8, 0u},nullptr },
+	{ "cryptonight_haven",   {cryptonight_heavy, cryptonight_haven, 255u},        {cryptonight_heavy, cryptonight_heavy, 0u},   nullptr },
+	{ "cryptonight_heavy",   {cryptonight_heavy, cryptonight_heavy, 0u},          {cryptonight_heavy, cryptonight_heavy, 0u},   nullptr },
+	{ "cryptonight_lite",    {cryptonight_aeon, cryptonight_lite, 255u},          {cryptonight_aeon, cryptonight_aeon, 0u},     nullptr },
+	{ "cryptonight_lite_v7", {cryptonight_aeon, cryptonight_aeon, 0u},            {cryptonight_aeon, cryptonight_aeon, 0u},     nullptr },
+	{ "cryptonight_lite_v7_xor", {cryptonight_aeon, cryptonight_ipbc, 255u},      {cryptonight_aeon, cryptonight_aeon, 0u}, nullptr },
+	{ "cryptonight_superfast",   {cryptonight_heavy, cryptonight_superfast, 255u},{cryptonight_heavy, cryptonight_superfast, 0u},   nullptr },
+	{ "cryptonight_v7",      {cryptonight_monero_v8, cryptonight_monero, 255u},   {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "cryptonight_v8",      {cryptonight_monero_v8, cryptonight_monero_v8, 255u},   {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "cryptonight_v7_stellite", {cryptonight_monero_v8, cryptonight_stellite, 255u}, {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "freehaven",           {cryptonight_heavy, cryptonight_superfast, 255u},    {cryptonight_heavy, cryptonight_superfast, 0u},   nullptr },
+	{ "graft",               {cryptonight_monero_v8, cryptonight_monero_v8, 0u},    {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "haven",               {cryptonight_heavy, cryptonight_haven, 255u},        {cryptonight_heavy, cryptonight_heavy, 0u},   nullptr },
+	{ "intense",             {cryptonight_monero_v8, cryptonight_monero, 255u},   {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "masari",              {cryptonight_monero_v8, cryptonight_masari, 255u},   {cryptonight_monero_v8, cryptonight_monero_v8, 0u},nullptr },
+	{ "monero",              {cryptonight_monero_v8, cryptonight_monero_v8, 0u},     {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, "pool.usxmrpool.com:3333" },
+	{ "qrl",             	 {cryptonight_monero_v8, cryptonight_monero, 255u},   {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "ryo",                 {cryptonight_heavy, cryptonight_heavy, 0u},          {cryptonight_heavy, cryptonight_heavy, 0u},   nullptr },
+	{ "stellite",            {cryptonight_monero_v8, cryptonight_stellite, 255u}, {cryptonight_monero_v8, cryptonight_monero_v8, 0u}, nullptr },
+	{ "turtlecoin",          {cryptonight_aeon, cryptonight_aeon, 0u},            {cryptonight_aeon, cryptonight_aeon, 0u},     nullptr }
+};
+
+constexpr size_t coin_algo_size = (sizeof(coins)/sizeof(coins[0]));
 
 inline bool checkType(Type have, Type want)
 {
@@ -99,6 +133,7 @@ inline bool checkType(Type have, Type want)
 struct jconf::opaque_private
 {
 	Document jsonDoc;
+	Document jsonDocPools;
 	const Value* configValues[iConfigCnt]; //Compile time constant
 
 	opaque_private()
@@ -106,73 +141,57 @@ struct jconf::opaque_private
 	}
 };
 
-jconf* jconf::oInst = nullptr;
-
 jconf::jconf()
 {
 	prv = new opaque_private();
 }
 
-bool jconf::GetThreadConfig(size_t id, thd_cfg &cfg)
+uint64_t jconf::GetPoolCount()
 {
-	if(!prv->configValues[aCpuThreadsConf]->IsArray())
-		return false;
-
-	if(id >= prv->configValues[aCpuThreadsConf]->Size())
-		return false;
-
-	const Value& oThdConf = prv->configValues[aCpuThreadsConf]->GetArray()[id];
-
-	if(!oThdConf.IsObject())
-		return false;
-
-	const Value *mode, *no_prefetch, *aff;
-	mode = GetObjectMember(oThdConf, "low_power_mode");
-	no_prefetch = GetObjectMember(oThdConf, "no_prefetch");
-	aff = GetObjectMember(oThdConf, "affine_to_cpu");
-
-	if(mode == nullptr || no_prefetch == nullptr || aff == nullptr)
-		return false;
-
-	if(!mode->IsBool() || !no_prefetch->IsBool())
-		return false;
-
-	if(!aff->IsNumber() && !aff->IsBool())
-		return false;
-
-	if(aff->IsNumber() && aff->GetInt64() < 0)
-		return false;
-
-	cfg.bDoubleMode = mode->GetBool();
-	cfg.bNoPrefetch = no_prefetch->GetBool();
-
-	if(aff->IsNumber())
-		cfg.iCpuAff = aff->GetInt64();
+	if(prv->configValues[aPoolList]->IsArray())
+		return prv->configValues[aPoolList]->Size();
 	else
-		cfg.iCpuAff = -1;
+		return 0;
+}
 
+bool jconf::GetPoolConfig(size_t id, pool_cfg& cfg)
+{
+	if(id >= GetPoolCount())
+		return false;
+
+	typedef const Value* cval;
+	cval jaddr, jlogin, jrigid, jpasswd, jnicehash, jtls, jtlsfp, jwt;
+	const Value& oThdConf = prv->configValues[aPoolList]->GetArray()[id];
+
+	/* We already checked presence and types */
+	jaddr = GetObjectMember(oThdConf, "pool_address");
+	jlogin = GetObjectMember(oThdConf, "wallet_address");
+	jrigid = GetObjectMember(oThdConf, "rig_id");
+	jpasswd = GetObjectMember(oThdConf, "pool_password");
+	jnicehash = GetObjectMember(oThdConf, "use_nicehash");
+	jtls = GetObjectMember(oThdConf, "use_tls");
+	jtlsfp = GetObjectMember(oThdConf, "tls_fingerprint");
+	jwt = GetObjectMember(oThdConf, "pool_weight");
+
+	cfg.sPoolAddr = jaddr->GetString();
+	cfg.sWalletAddr = jlogin->GetString();
+	cfg.sRigId = jrigid->GetString();
+	cfg.sPasswd = jpasswd->GetString();
+	cfg.nicehash = jnicehash->GetBool();
+	cfg.tls = jtls->GetBool();
+	cfg.tls_fingerprint = jtlsfp->GetString();
+	cfg.raw_weight = jwt->GetUint64();
+
+	size_t dlt = wt_max - wt_min;
+	if(dlt != 0)
+	{
+		/* Normalise weights between 0 and 9.8 */
+		cfg.weight = double(cfg.raw_weight - wt_min) * 9.8;
+		cfg.weight /= dlt;
+	}
+	else /* Special case - user selected same weights for everything */
+		cfg.weight = 0.0;
 	return true;
-}
-
-jconf::slow_mem_cfg jconf::GetSlowMemSetting()
-{
-	const char* opt = prv->configValues[sUseSlowMem]->GetString();
-
-	if(strcasecmp(opt, "always") == 0)
-		return always_use;
-	else if(strcasecmp(opt, "no_mlck") == 0)
-		return no_mlck;
-	else if(strcasecmp(opt, "warn") == 0)
-		return print_warning;
-	else if(strcasecmp(opt, "never") == 0)
-		return never_use;
-	else
-		return unknown_value;
-}
-
-bool jconf::GetTlsSetting()
-{
-	return prv->configValues[bTlsMode]->GetBool();
 }
 
 bool jconf::TlsSecureAlgos()
@@ -180,42 +199,9 @@ bool jconf::TlsSecureAlgos()
 	return prv->configValues[bTlsSecureAlgo]->GetBool();
 }
 
-const char* jconf::GetTlsFingerprint()
-{
-	return prv->configValues[sTlsFingerprint]->GetString();
-}
-
-const char* jconf::GetPoolAddress()
-{
-	return prv->configValues[sPoolAddr]->GetString();
-}
-
-const char* jconf::GetPoolPwd()
-{
-	return prv->configValues[sPoolPwd]->GetString();
-}
-
-const char* jconf::GetWalletAddress()
-{
-	return prv->configValues[sWalletAddr]->GetString();
-}
-
 bool jconf::PreferIpv4()
 {
 	return prv->configValues[bPreferIpv4]->GetBool();
-}
-
-size_t jconf::GetThreadCount()
-{
-	if(prv->configValues[aCpuThreadsConf]->IsArray())
-		return prv->configValues[aCpuThreadsConf]->Size();
-	else
-		return 0;
-}
-
-bool jconf::NeedsAutoconf()
-{
-	return !prv->configValues[aCpuThreadsConf]->IsArray();
 }
 
 uint64_t jconf::GetCallTimeout()
@@ -238,6 +224,11 @@ uint64_t jconf::GetVerboseLevel()
 	return prv->configValues[iVerboseLevel]->GetUint64();
 }
 
+bool jconf::PrintMotd()
+{
+	return prv->configValues[bPrintMotd]->GetBool();
+}
+
 uint64_t jconf::GetAutohashTime()
 {
 	return prv->configValues[iAutohashTime]->GetUint64();
@@ -245,12 +236,20 @@ uint64_t jconf::GetAutohashTime()
 
 uint16_t jconf::GetHttpdPort()
 {
-	return prv->configValues[iHttpdPort]->GetUint();
+	if(xmrstak::params::inst().httpd_port == xmrstak::params::httpd_port_unset)
+		return prv->configValues[iHttpdPort]->GetUint();
+	else
+		return uint16_t(xmrstak::params::inst().httpd_port);
 }
 
-bool jconf::NiceHashMode()
+const char* jconf::GetHttpUsername()
 {
-	return prv->configValues[bNiceHashMode]->GetBool();
+	return prv->configValues[sHttpLogin]->GetString();
+}
+
+const char* jconf::GetHttpPassword()
+{
+	return prv->configValues[sHttpPass]->GetString();
 }
 
 bool jconf::DaemonMode()
@@ -289,17 +288,76 @@ bool jconf::check_cpu_features()
 	return bHaveSse2;
 }
 
-bool jconf::parse_config(const char* sFilename)
+jconf::slow_mem_cfg jconf::GetSlowMemSetting()
+{
+	const char* opt = prv->configValues[sUseSlowMem]->GetString();
+
+	if(strcasecmp(opt, "always") == 0)
+		return always_use;
+	else if(strcasecmp(opt, "no_mlck") == 0)
+		return no_mlck;
+	else if(strcasecmp(opt, "warn") == 0)
+		return print_warning;
+	else if(strcasecmp(opt, "never") == 0)
+		return never_use;
+	else
+		return unknown_value;
+}
+
+std::string jconf::GetMiningCoin()
+{
+	if(xmrstak::params::inst().currency.length() > 0)
+		return xmrstak::params::inst().currency;
+	else
+		return prv->configValues[sCurrency]->GetString();
+}
+
+void jconf::GetAlgoList(std::string& list)
+{
+	list.reserve(256);
+	for(size_t i=0; i < coin_algo_size; i++)
+	{
+		list += "\t- ";
+		list += coins[i].coin_name;
+		list += "\n";
+	}
+}
+
+bool jconf::IsOnAlgoList(std::string& needle)
+{
+	std::transform(needle.begin(), needle.end(), needle.begin(), ::tolower);
+
+	for(size_t i=0; i < coin_algo_size; i++)
+	{
+		if(needle == coins[i].coin_name)
+			return true;
+	}
+	return false;
+}
+
+const char* jconf::GetDefaultPool(const char* needle)
+{
+	const char* default_example = "pool.example.com:3333";
+
+	for(size_t i=0; i < coin_algo_size; i++)
+	{
+		if(strcmp(needle, coins[i].coin_name) == 0)
+		{
+			if(coins[i].default_pool != nullptr)
+				return coins[i].default_pool;
+			else
+				return default_example;
+		}
+	}
+
+	return default_example;
+}
+
+bool jconf::parse_file(const char* sFilename, bool main_conf)
 {
 	FILE * pFile;
 	char * buffer;
 	size_t flen;
-
-	if(!check_cpu_features())
-	{
-		printer::inst()->print_msg(L0, "CPU support of SSE2 is required.");
-		return false;
-	}
 
 	pFile = fopen(sFilename, "rb");
 	if (pFile == NULL)
@@ -349,68 +407,145 @@ bool jconf::parse_config(const char* sFilename)
 	buffer[flen] = '}';
 	buffer[flen + 1] = '\0';
 
-	prv->jsonDoc.Parse<kParseCommentsFlag|kParseTrailingCommasFlag>(buffer, flen+2);
+	Document& root = main_conf ? prv->jsonDoc : prv->jsonDocPools;
+
+	root.Parse<kParseCommentsFlag|kParseTrailingCommasFlag>(buffer, flen+2);
 	free(buffer);
 
-	if(prv->jsonDoc.HasParseError())
+	if(root.HasParseError())
 	{
-		printer::inst()->print_msg(L0, "JSON config parse error(offset %llu): %s",
-			int_port(prv->jsonDoc.GetErrorOffset()), GetParseError_En(prv->jsonDoc.GetParseError()));
+		printer::inst()->print_msg(L0, "JSON config parse error in '%s' (offset %llu): %s",
+			sFilename, int_port(root.GetErrorOffset()), GetParseError_En(root.GetParseError()));
 		return false;
 	}
 
-
-	if(!prv->jsonDoc.IsObject())
+	if(!root.IsObject())
 	{ //This should never happen as we created the root ourselves
-		printer::inst()->print_msg(L0, "Invalid config file. No root?\n");
+		printer::inst()->print_msg(L0, "Invalid config file '%s'. No root?", sFilename);
 		return false;
 	}
 
-	for(size_t i = 0; i < iConfigCnt; i++)
+	if(main_conf)
 	{
-		if(oConfigValues[i].iName != i)
+		for(size_t i = 2; i < iConfigCnt; i++)
 		{
-			printer::inst()->print_msg(L0, "Code error. oConfigValues are not in order.");
-			return false;
+			if(oConfigValues[i].iName != i)
+			{
+				printer::inst()->print_msg(L0, "Code error. oConfigValues are not in order.");
+				return false;
+			}
+
+			prv->configValues[i] = GetObjectMember(root, oConfigValues[i].sName);
+
+			if(prv->configValues[i] == nullptr)
+			{
+				printer::inst()->print_msg(L0, "Invalid config file '%s'. Missing value \"%s\".", sFilename, oConfigValues[i].sName);
+				return false;
+			}
+
+			if(!checkType(prv->configValues[i]->GetType(), oConfigValues[i].iType))
+			{
+				printer::inst()->print_msg(L0, "Invalid config file '%s'. Value \"%s\" has unexpected type.", sFilename, oConfigValues[i].sName);
+				return false;
+			}
 		}
-
-		prv->configValues[i] = GetObjectMember(prv->jsonDoc, oConfigValues[i].sName);
-
-		if(prv->configValues[i] == nullptr)
+	}
+	else
+	{
+		for(size_t i = 0; i < 2; i++)
 		{
-			printer::inst()->print_msg(L0, "Invalid config file. Missing value \"%s\".", oConfigValues[i].sName);
-			return false;
-		}
+			if(oConfigValues[i].iName != i)
+			{
+				printer::inst()->print_msg(L0, "Code error. oConfigValues are not in order.");
+				return false;
+			}
 
-		if(!checkType(prv->configValues[i]->GetType(), oConfigValues[i].iType))
-		{
-			printer::inst()->print_msg(L0, "Invalid config file. Value \"%s\" has unexpected type.", oConfigValues[i].sName);
-			return false;
+			prv->configValues[i] = GetObjectMember(root, oConfigValues[i].sName);
+
+			if(prv->configValues[i] == nullptr)
+			{
+				printer::inst()->print_msg(L0, "Invalid config file '%s'. Missing value \"%s\".", sFilename, oConfigValues[i].sName);
+				return false;
+			}
+
+			if(!checkType(prv->configValues[i]->GetType(), oConfigValues[i].iType))
+			{
+				printer::inst()->print_msg(L0, "Invalid config file '%s'. Value \"%s\" has unexpected type.", sFilename, oConfigValues[i].sName);
+				return false;
+			}
 		}
 	}
 
-	thd_cfg c;
-	for(size_t i=0; i < GetThreadCount(); i++)
-	{
-		if(!GetThreadConfig(i, c))
-		{
-			printer::inst()->print_msg(L0, "Thread %llu has invalid config.", int_port(i));
-			return false;
-		}
-	}
+	return true;
+}
 
-	if(NiceHashMode() && GetThreadCount() >= 32)
+bool jconf::parse_config(const char* sFilename, const char* sFilenamePools)
+{
+	if(!check_cpu_features())
 	{
-		printer::inst()->print_msg(L0, "You need to use less than 32 threads in NiceHash mode.");
+		printer::inst()->print_msg(L0, "CPU support of SSE2 is required.");
 		return false;
 	}
 
-	if(GetSlowMemSetting() == unknown_value)
+	if(!parse_file(sFilename, true))
+		return false;
+
+	if(!parse_file(sFilenamePools, false))
+		return false;
+
+	size_t pool_cnt = prv->configValues[aPoolList]->Size();
+	if(pool_cnt == 0)
 	{
-		printer::inst()->print_msg(L0,
-			"Invalid config file. use_slow_memory must be \"always\", \"no_mlck\", \"warn\" or \"never\"");
+		printer::inst()->print_msg(L0, "Invalid config file. pool_list must not be empty.");
 		return false;
 	}
+
+	std::vector<size_t> pool_weights;
+	pool_weights.reserve(pool_cnt);
+
+	const char* aPoolValues[] = { "pool_address", "wallet_address", "rig_id", "pool_password", "use_nicehash", "use_tls", "tls_fingerprint", "pool_weight" };
+	Type poolValTypes[] = { kStringType, kStringType, kStringType, kStringType, kTrueType, kTrueType, kStringType, kNumberType };
+
+	constexpr size_t pvcnt = sizeof(aPoolValues)/sizeof(aPoolValues[0]);
+	for(uint32_t i=0; i < pool_cnt; i++)
+	{
+		const Value& oThdConf = prv->configValues[aPoolList]->GetArray()[i];
+
+		if(!oThdConf.IsObject())
+		{
+			printer::inst()->print_msg(L0, "Invalid config file. pool_list must contain objects.");
+			return false;
+		}
+
+		for(uint32_t j=0; j < pvcnt; j++)
+		{
+			const Value* v;
+			if((v = GetObjectMember(oThdConf, aPoolValues[j])) == nullptr)
+			{
+				printer::inst()->print_msg(L0, "Invalid config file. Pool %u does not have the value %s.", i, aPoolValues[j]);
+				return false;
+			}
+
+			if(!checkType(v->GetType(), poolValTypes[j]))
+			{
+				printer::inst()->print_msg(L0, "Invalid config file. Value %s for pool %u has unexpected type.", aPoolValues[j], i);
+				return false;
+			}
+		}
+
+		const Value* jwt = GetObjectMember(oThdConf, "pool_weight");
+		size_t wt;
+		if(!jwt->IsUint64() || (wt = jwt->GetUint64()) == 0)
+		{
+			printer::inst()->print_msg(L0, "Invalid pool list for pool %u. Pool weight needs to be an integer larger than zero.", i);
+			return false;
+		}
+
+		pool_weights.emplace_back(wt);
+	}
+
+	wt_max = *std::max_element(pool_weights.begin(), pool_weights.end());
+	wt_min = *std::min_element(pool_weights.begin(), pool_weights.end());
 
 	if(!prv->configValues[iCallTimeout]->IsUint64() ||
 		!prv->configValues[iNetRetry]->IsUint64() ||
@@ -418,6 +553,13 @@ bool jconf::parse_config(const char* sFilename)
 	{
 		printer::inst()->print_msg(L0,
 			"Invalid config file. call_timeout, retry_time and giveup_limit need to be positive integers.");
+		return false;
+	}
+
+	if(prv->configValues[iCallTimeout]->GetUint64() < 2 || prv->configValues[iNetRetry]->GetUint64() < 2)
+	{
+		printer::inst()->print_msg(L0,
+			"Invalid config file. call_timeout and retry_time need to be larger than 1 second.");
 		return false;
 	}
 
@@ -435,14 +577,20 @@ bool jconf::parse_config(const char* sFilename)
 		return false;
 	}
 
-#ifdef CONF_NO_TLS
-	if(prv->configValues[bTlsMode]->GetBool())
+	if(prv->configValues[bAesOverride]->IsBool())
+		bHaveAes = prv->configValues[bAesOverride]->GetBool();
+
+	if(!bHaveAes)
+		printer::inst()->print_msg(L0, "Your CPU doesn't support hardware AES. Don't expect high hashrates.");
+
+	printer::inst()->set_verbose_level(prv->configValues[iVerboseLevel]->GetUint64());
+
+	if(GetSlowMemSetting() == unknown_value)
 	{
 		printer::inst()->print_msg(L0,
-			"Invalid config file. TLS enabled while the application has been compiled without TLS support.");
+			"Invalid config file. use_slow_memory must be \"always\", \"no_mlck\", \"warn\" or \"never\"");
 		return false;
 	}
-#endif // CONF_NO_TLS
 
 #ifdef _WIN32
 	if(GetSlowMemSetting() == no_mlck)
@@ -452,16 +600,31 @@ bool jconf::parse_config(const char* sFilename)
 	}
 #endif // _WIN32
 
-	printer::inst()->set_verbose_level(prv->configValues[iVerboseLevel]->GetUint64());
+	std::string ctmp = GetMiningCoin();
+	std::transform(ctmp.begin(), ctmp.end(), ctmp.begin(), ::tolower);
 
-	if(NeedsAutoconf())
-		return true;
+	if(ctmp.length() == 0)
+	{
+		printer::inst()->print_msg(L0, "You need to specify the coin that you want to mine.");
+		return false;
+	}
 
-	if(prv->configValues[bAesOverride]->IsBool())
-		bHaveAes = prv->configValues[bAesOverride]->GetBool();
+	for(size_t i=0; i < coin_algo_size; i++)
+	{
+		if(ctmp == coins[i].coin_name)
+		{
+			currentCoin = coins[i];
+			break;
+		}
+	}
 
-	if(!bHaveAes)
-		printer::inst()->print_msg(L0, "Your CPU doesn't support hardware AES. Don't expect high hashrates.");
+	if(currentCoin.GetDescription(1).GetMiningAlgo() == invalid_algo)
+	{
+		std::string cl;
+		GetAlgoList(cl);
+		printer::inst()->print_msg(L0, "Unrecognised coin '%s', your options are:\n%s", ctmp.c_str(), cl.c_str());
+		return false;
+	}
 
 	return true;
 }
